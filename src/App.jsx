@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Chart from 'chart.js/auto';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -9,8 +9,6 @@ function App() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const chartRefs = React.useRef([]);
-
   const handleChange = (e) => {
     setUser({ ...user, [e.target.name]: e.target.value });
   };
@@ -19,31 +17,36 @@ function App() {
     const fileList = Array.from(e.target.files).slice(0, 4);
     setFiles(fileList);
     setResults([]);
-    chartRefs.current = [];
     setLoading(true);
+
     const newResults = [];
 
     for (const file of fileList) {
       const text = await file.text();
       const row = text.trim().split(/\r?\n/)[0];
-      const values = row.split(',').map(Number);
+      const values = row.split(',').map(x => Number(x.trim())).filter(x => !isNaN(x));
+      if (values.length !== 20) {
+        newResults.push({ filename: file.name, values: [], risk: 0, reply: '❗ 上傳的資料格式有誤，請提供 20 筆 ECG 數值。' });
+        continue;
+      }
+
       const avg = values.reduce((a, b) => a + b, 0) / values.length;
       const risk = avg > 0.35 ? 0.78 : 0.12;
 
       const prompt = `
-以下是一位使用者的 ECG 心電圖特徵（共 20 項數值），為醫療輔助評估用途。
-使用者資料如下：
-姓名：${user.name || '匿名'}
-年齡：${user.age}
-性別：${user.gender}
-病史描述：${user.history || '無'}
+這是一位使用者的 ECG 心電圖特徵（共 20 項純數值），僅供 AI 醫療輔助用途：
+使用者基本資料如下：
+- 姓名：${user.name || '匿名'}
+- 年齡：${user.age}
+- 性別：${user.gender}
+- 病史描述：${user.history || '無'}
 
-請模擬心臟科醫師，根據 ECG 數值波動趨勢判斷此人在 1～3 年內是否可能罹患心臟衰竭，並給出風險說明、預防建議與就醫建議。
+請模擬心臟科醫師的判斷方式，根據以下 ECG 數據趨勢，
+推估該使用者在 1～3 年內是否可能罹患心臟衰竭，
+並提供簡潔明確的建議、風險說明與健康提醒（請條列列出）。
 
 ECG 數據如下：
 ${values.join(', ')}
-
-請條列回應，並以親切語氣呈現。
       `;
 
       const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -67,24 +70,27 @@ ${values.join(', ')}
     setLoading(false);
   };
 
-  const renderChart = (values, canvasId) => {
-    const ctx = document.getElementById(canvasId);
-    if (ctx) {
-      new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: values.map((_, i) => i + 1),
-          datasets: [{
-            label: 'ECG 波形',
-            data: values,
-            fill: false,
-            borderColor: 'green',
-            tension: 0.3
-          }]
-        }
-      });
-    }
-  };
+  useEffect(() => {
+    results.forEach((r, i) => {
+      const canvasId = `chart-${i}`;
+      const ctx = document.getElementById(canvasId);
+      if (ctx && r.values.length > 0) {
+        new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: r.values.map((_, i) => i + 1),
+            datasets: [{
+              label: 'ECG 波形',
+              data: r.values,
+              fill: false,
+              borderColor: 'green',
+              tension: 0.3
+            }]
+          }
+        });
+      }
+    });
+  }, [results]);
 
   const exportPDF = async () => {
     const doc = new jsPDF();
@@ -120,8 +126,7 @@ ${values.join(', ')}
           <div key={i} className="report-block">
             <h3>{r.filename}</h3>
             <p><strong>預測風險：</strong>{(r.risk * 100).toFixed(1)}%</p>
-            <canvas id={`chart-${i}`} style={{ maxHeight: '200px' }}></canvas>
-            {setTimeout(() => renderChart(r.values, `chart-${i}`), 100)}
+            {r.values.length > 0 && <canvas id={`chart-${i}`} style={{ maxHeight: '200px' }}></canvas>}
             <h4>AI 分析與建議</h4>
             <p>{r.reply}</p>
           </div>
